@@ -63,6 +63,20 @@ def main() -> None:
             confirmed=True,
         )
     )
+    # Deliberately schedule a second MORNING task for Rex so the conflict
+    # detector has something to catch (his breakfast is also in the morning).
+    rex.schedule_medication(
+        Medication(
+            item_id=0,
+            time_of_day=TimeOfDay.MORNING,
+            notes="give with breakfast",
+            med_name="Heartgard",
+            dosage="1 chew",
+            start_date=today,
+            end_date=today,
+            times_per_day=1,
+        )
+    )
 
     mochi.meals.append(
         Meal(
@@ -104,6 +118,56 @@ def main() -> None:
             print("  Nothing scheduled today.")
         for entry in schedule:
             print(f"  [{entry.time_of_day.name:<9}] {entry.action}")
+
+    # 5. Exercise the new scheduling algorithms on a flat list of every task.
+    #    Collect the entries in whatever order the pets/plans yield them (i.e.
+    #    NOT pre-sorted) so sort_by_time() has real work to do.
+    all_entries = [
+        entry
+        for pet in owner.display_pets()
+        for entry in plans[pet.pet_id].entries
+    ]
+
+    print("\n" + "=" * 44)
+    print("All tasks sorted by time of day")
+    print("=" * 44)
+    for entry in planner.sort_by_time(all_entries):
+        print(f"  [{entry.time_of_day.name:<9}] {entry.pet_name}: {entry.action}")
+
+    # -- Filtering by pet --------------------------------------------------
+    rex_entries = planner.filter_by_pet(all_entries, "Rex")
+    print(f"\nFilter by pet — Rex has {len(rex_entries)} task(s) today.")
+
+    # -- Recurrence: complete a daily task and auto-schedule the next one ---
+    breakfast = planner.filter_by_pet(all_entries, "Rex")[0]
+    next_occurrence = planner.mark_task_complete(breakfast)
+    print(
+        f"\nCompleted '{breakfast.action}' "
+        f"(frequency: {breakfast.frequency.name})."
+    )
+    if next_occurrence is not None:
+        print(
+            f"  -> auto-scheduled next occurrence for "
+            f"{next_occurrence.due_date:%A, %b %d}."
+        )
+
+    # -- Filtering by status (after completing one task) -------------------
+    done = planner.filter_by_status(all_entries, completed=True)
+    pending = planner.filter_by_status(all_entries, completed=False)
+    print(
+        f"\nFilter by status — {len(done)} done, {len(pending)} pending."
+    )
+
+    # -- Conflict detection ------------------------------------------------
+    print("\n" + "=" * 44)
+    print("Conflict check")
+    print("=" * 44)
+    conflicts = planner.detect_conflicts(all_entries)
+    if conflicts:
+        for warning in conflicts:
+            print(f"  WARNING: {warning}")
+    else:
+        print("  No conflicts found.")
 
 
 if __name__ == "__main__":

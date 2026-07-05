@@ -91,8 +91,25 @@ model first was cheaper than working around it later.
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+One deliberate tradeoff is that conflict detection only flags tasks that share
+the *exact* same `TimeOfDay` slot (e.g. two MORNING tasks), instead of reasoning
+about real clock times and overlapping durations. A 30-minute walk at 8:00 and a
+vet call at 8:15 would **not** be flagged, because both are simply "MORNING."
+
+This is reasonable for PawPal's scenario. The planner organizes a pet owner's day
+into coarse buckets (morning → night) rather than a minute-by-minute calendar, so
+"two things in the same part of the day" is exactly the granularity an owner
+actually cares about. Keeping it to exact-slot matching means `detect_conflicts`
+stays O(n), returns a friendly warning string instead of crashing, and never has
+to invent precise start/end times the data model doesn't store. If the app later
+adds real HH:MM times and durations, the same grouping structure can be upgraded
+to interval-overlap checking without changing any of its callers.
+
+A related tradeoff: when a recurring task is completed, `mark_task_complete`
+spawns the next occurrence by advancing the due date with `timedelta` (+1 day for
+daily, +7 for weekly) but does not re-verify the underlying care item's own date
+range. This favors a simple, predictable "always produce the next instance" rule
+over perfectly modeling, say, a medication course that ends mid-week.
 
 ---
 

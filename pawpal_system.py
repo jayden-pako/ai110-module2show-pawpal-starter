@@ -65,6 +65,14 @@ class TimeOfDay(IntEnum):
     NIGHT = 5
 
 
+class Frequency(Enum):
+    """How often a care item repeats."""
+
+    NONE = "none"      # a one-off (e.g. a single grooming appointment)
+    DAILY = "daily"
+    WEEKLY = "weekly"
+
+
 @dataclass
 class DateRange:
     """A start/end span, used for a shopping cart's week."""
@@ -123,6 +131,14 @@ class CareItem(ABC):
         """Append notes to a description if any are present."""
         return f"{text} — {self.notes}" if self.notes else text
 
+    def recurrence(self) -> Frequency:
+        """Return how often this item repeats (default: a one-off).
+
+        Polymorphic like describe()/occurs_on(): the scheduler asks any item how
+        often it recurs without inspecting concrete subclass types.
+        """
+        return Frequency.NONE
+
 
 @dataclass
 class Meal(CareItem):
@@ -140,6 +156,14 @@ class Meal(CareItem):
     def occurs_on(self, day: date) -> bool:
         # An empty day list means "every day" (e.g. a standing daily feeding).
         return not self.days or _day_of_week(day) in self.days
+
+    def recurrence(self) -> Frequency:
+        """Return how often this meal repeats.
+
+        No specific weekdays means a standing daily feeding; a non-empty `days`
+        list means it recurs weekly on those days.
+        """
+        return Frequency.DAILY if not self.days else Frequency.WEEKLY
 
 
 @dataclass
@@ -164,6 +188,14 @@ class Medication(CareItem):
         # A course of medication runs across an inclusive date range.
         return self.start_date <= day <= self.end_date
 
+    def recurrence(self) -> Frequency:
+        """Return how often this medication repeats.
+
+        A medication is taken on every day its course is active, so it always
+        recurs daily (the course's date range bounds when it actually applies).
+        """
+        return Frequency.DAILY
+
 
 @dataclass
 class Walk(CareItem):
@@ -180,6 +212,14 @@ class Walk(CareItem):
 
     def occurs_on(self, day: date) -> bool:
         return not self.days or _day_of_week(day) in self.days
+
+    def recurrence(self) -> Frequency:
+        """Return how often this walk repeats.
+
+        No specific weekdays means a standing daily walk; a non-empty `days`
+        list means it recurs weekly on those days.
+        """
+        return Frequency.DAILY if not self.days else Frequency.WEEKLY
 
 
 @dataclass
@@ -248,6 +288,12 @@ class PlanEntry:
     action: str
     care_item: CareItem | None = None
     completed: bool = False
+    # Denormalized fields the scheduler reads after a plan is built: which pet
+    # owns the task (for filtering / conflict messages), how often it repeats,
+    # and the date it is due (so completing a recurring task can spawn the next).
+    pet_name: str = ""
+    frequency: Frequency = Frequency.NONE
+    due_date: date | None = None
 
     def mark_complete(self) -> None:
         """Mark this task as done."""
@@ -481,6 +527,9 @@ class CarePlanner:
                     time_of_day=item.time_of_day,
                     action=item.describe(),
                     care_item=item,
+                    pet_name=pet.pet_name,
+                    frequency=item.recurrence(),
+                    due_date=day,
                 )
             )
 
@@ -526,6 +575,79 @@ class CarePlanner:
             f"{len(items)} task(s) planned ({breakdown}), "
             "ordered from morning to night."
         )
+
+    # -- sorting / filtering ----------------------------------------------
+    def sort_by_time(self, entries: list[PlanEntry]) -> list[PlanEntry]:
+        """Return plan entries ordered from morning to night.
+
+        `time_of_day` is an IntEnum, so a single lambda key sorts them
+        chronologically. (If times were stored as "HH:MM" strings instead, the
+        same `key=lambda e: e.time` would still sort correctly, because
+        zero-padded clock strings sort lexicographically — "08:30" < "12:00".)
+        """
+        return sorted(entries, key=lambda entry: entry.time_of_day)
+
+    def filter_by_status(
+        self, entries: list[PlanEntry], completed: bool
+    ) -> list[PlanEntry]:
+        """Return only the entries whose completion matches `completed`."""
+        return [entry for entry in entries if entry.completed == completed]
+
+    def filter_by_pet(
+        self, entries: list[PlanEntry], pet_name: str
+    ) -> list[PlanEntry]:
+        """Return only the entries belonging to the named pet (case-insensitive)."""
+        target = pet_name.strip().lower()
+        return [entry for entry in entries if entry.pet_name.lower() == target]
+
+    # -- recurrence -------------------------------------------------------
+    def mark_task_complete(self, entry: PlanEntry) -> PlanEntry | None:
+        """Mark a task done and, if it recurs, return its next occurrence.
+
+        Uses timedelta to advance the due date accurately: +1 day for DAILY,
+        +7 days for WEEKLY. One-off tasks return None (nothing to reschedule).
+        """
+        entry.mark_complete()
+
+        step_days = {Frequency.DAILY: 1, Frequency.WEEKLY: 7}.get(entry.frequency)
+        if step_days is None or entry.due_date is None:
+            return None  # one-off, or no due date to advance from
+
+        return PlanEntry(
+            time_of_day=entry.time_of_day,
+            action=entry.action,
+            care_item=entry.care_item,
+            completed=False,  # the fresh occurrence starts incomplete
+            pet_name=entry.pet_name,
+            frequency=entry.frequency,
+            due_date=entry.due_date + timedelta(days=step_days),
+        )
+
+    # -- conflict detection -----------------------------------------------
+    def detect_conflicts(self, entries: list[PlanEntry]) -> list[str]:
+        """Return a warning string per time slot that holds more than one task.
+
+        Lightweight by design: it flags exact same-slot collisions (across all
+        pets) and returns human-readable strings instead of raising, so callers
+        can print the warnings and keep running.
+        """
+        by_slot: dict[TimeOfDay, list[PlanEntry]] = {}
+        for entry in entries:
+            by_slot.setdefault(entry.time_of_day, []).append(entry)
+
+        warnings: list[str] = []
+        for slot in sorted(by_slot):
+            group = by_slot[slot]
+            if len(group) > 1:
+                who = "; ".join(
+                    f"{entry.pet_name or 'unknown'} — {entry.action}"
+                    for entry in group
+                )
+                warnings.append(
+                    f"Conflict at {slot.name.title()}: {len(group)} tasks "
+                    f"overlap ({who})."
+                )
+        return warnings
 
 
 # ---------------------------------------------------------------------------
