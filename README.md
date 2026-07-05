@@ -22,6 +22,29 @@ Your final app should:
 - Display the plan clearly (and ideally explain the reasoning)
 - Include tests for the most important scheduling behaviors
 
+## ✨ Features
+
+What the finished app actually implements (algorithms detailed in
+[Smarter Scheduling](#-smarter-scheduling)):
+
+**Scheduling algorithms**
+
+- **Sorting by time** — orders a day's tasks morning → night using the `TimeOfDay` `IntEnum` (`CarePlanner.sort_by_time`).
+- **Conflict warnings** — flags any tasks sharing the same time slot (across one or many pets) as human-readable warnings; never raises (`CarePlanner.detect_conflicts`).
+- **Daily / weekly recurrence** — completing a recurring task auto-schedules its next occurrence, advancing the due date by +1 day (daily) or +7 days (weekly); one-off tasks don't recur (`CarePlanner.mark_task_complete` + `CareItem.recurrence`).
+- **Occurrence rules** — each care item decides if it's due on a date: meals/walks on chosen weekdays (or every day), medications across an inclusive start–end range, grooming on a single calendar day (`CareItem.occurs_on`).
+- **Filtering** — narrow a plan by pet name (case-insensitive) or by completion status (`CarePlanner.filter_by_pet`, `filter_by_status`).
+- **Explainable plans** — every plan carries a generated reasoning string summarizing task counts by kind (`CarePlanner._explain_reasoning`).
+
+**Domain & app**
+
+- **Owner accounts** — sign up / sign in with salted PBKDF2-HMAC-SHA256 password hashing.
+- **Pet management** — add/remove pets, each holding its own meals, medications, walks, and grooming appointments.
+- **Polymorphic care items** — `Meal`, `Medication`, `Walk`, and `GroomingAppointment` share one `CareItem` interface (`describe`, `occurs_on`, `recurrence`), so the planner treats them uniformly and new kinds slot in without changing it.
+- **Owner-wide planning** — builds one `DailyPlan` per pet for a given day across all of an owner's pets (`CarePlanner.generate_daily_plans_for_owner`).
+- **Weekly shopping cart** — derived automatically from recurring care items, with quantities inferred from how often each item recurs (`Pet.build_shopping_cart`).
+- **Streamlit UI** — add pets and tasks, generate today's plan, and view a sorted, filterable table with conflict warnings surfaced up top.
+
 ## Getting started
 
 ### Setup
@@ -154,14 +177,93 @@ fresh `PlanEntry` for the next occurrence, advancing the due date with
 
 ## 📸 Demo Walkthrough
 
-Describe your app in numbered steps so a reader can follow along without watching a video:
+PawPal+ has two front doors: an interactive **Streamlit app** (`app.py`) for the
+pet owner, and a scripted **CLI demo** (`main.py`) that exercises every scheduling
+algorithm end to end.
 
-1. <!-- Describe this step -->
-2. <!-- Describe this step -->
-3. <!-- Describe this step -->
-4. <!-- Describe this step -->
-5. <!-- Add more steps as needed -->
+### The Streamlit UI
+
+Launch it with `streamlit run app.py`. The page is organized top-to-bottom into
+the actions an owner takes:
+
+- **Add a Pet** — enter name, species, breed, and age; submitting adds the pet
+  and it appears in a "Your pets" table (with a per-pet count of care items).
+- **Schedule a Task** — pick one of your pets, give the task a title, duration,
+  and priority. Priority maps onto a time of day (high → morning, medium →
+  midday, low → evening) so higher-priority tasks land earlier in the day.
+- **Today's Schedule** — click **Generate schedule** to build the plan across all
+  your pets for today. The result is one unified, professional table you can
+  **filter** by pet or by status (all / to-do / completed).
+
+### Example workflow
+
+1. **Add a pet** — e.g. "Mochi", a 2-year-old cat. It shows up in the pets table.
+2. **Add a second pet** — e.g. "Rex", a dog, so the schedule spans multiple pets.
+3. **Schedule tasks** — give Rex a high-priority "Morning walk" and a high-priority
+   "Morning meds" (both map to the morning slot), plus an evening task for Mochi.
+4. **Generate the schedule** — the plan builds instantly for the current day.
+5. **Read the results** — tasks are listed morning → night, and you can filter the
+   table down to just Rex or just the tasks still to do.
+
+### Key Scheduler behaviors you'll see
+
+- **Sorting by time** — the table is always ordered morning → night, regardless of
+  the order tasks were added, because entries sort on the `TimeOfDay` `IntEnum`.
+- **Conflict warnings** — because both of Rex's morning tasks share the morning
+  slot, the app surfaces a ⚠️ warning **above** the table naming the pet, the two
+  tasks, and the slot — so the clash is impossible to miss before you read the plan.
+  With no clashes, a green ✅ "no conflicts" message confirms the day is clear.
+- **Filtering** — the pet and status dropdowns narrow the same plan without
+  rebuilding it, and conflicts are still checked against the *full* day (hiding a
+  pet never hides a real-world overlap).
+- **Recurrence & explainability** are visible in the CLI demo below: completing a
+  daily task auto-schedules tomorrow's occurrence, and every plan reports the
+  reasoning behind it.
+
+### Sample CLI output (`python main.py`)
+
+The demo signs up an owner, registers two pets (Rex and Mochi), schedules tasks
+at different times — including two in Rex's morning slot to trigger a conflict —
+then prints the plan and runs every algorithm over it:
+
+```text
+============================================
+Today's Schedule — Sunday, July 05, 2026
+Owner: Jayden
+============================================
+
+Rex (Dog)
+  [MORNING  ] Meal: 150g of Kibble (Morning) — one scoop
+  [MORNING  ] Medication: Heartgard 1 chew, 1x/day — give with breakfast
+  [MIDDAY   ] Grooming: Bath & brush with Happy Paws at 2026-07-05 12:30 (confirmed) — nail trim too
+  [AFTERNOON] Walk: 30 min via Riverside loop (Afternoon) — keep it on-leash
+
+Mochi (Cat)
+  [EVENING  ] Meal: 85g of Wet food (Evening)
+  [NIGHT    ] Medication: Amitriptyline 5mg, 1x/day — with food
+
+============================================
+All tasks sorted by time of day
+============================================
+  [MORNING  ] Rex: Meal: 150g of Kibble (Morning) — one scoop
+  [MORNING  ] Rex: Medication: Heartgard 1 chew, 1x/day — give with breakfast
+  [MIDDAY   ] Rex: Grooming: Bath & brush with Happy Paws at 2026-07-05 12:30 (confirmed) — nail trim too
+  [AFTERNOON] Rex: Walk: 30 min via Riverside loop (Afternoon) — keep it on-leash
+  [EVENING  ] Mochi: Meal: 85g of Wet food (Evening)
+  [NIGHT    ] Mochi: Medication: Amitriptyline 5mg, 1x/day — with food
+
+Filter by pet — Rex has 4 task(s) today.
+
+Completed 'Meal: 150g of Kibble (Morning) — one scoop' (frequency: DAILY).
+  -> auto-scheduled next occurrence for Monday, Jul 06.
+
+Filter by status — 1 done, 5 pending.
+
+============================================
+Conflict check
+============================================
+  WARNING: Conflict at Morning: 2 tasks overlap (Rex — Meal: 150g of Kibble (Morning) — one scoop; Rex — Medication: Heartgard 1 chew, 1x/day — give with breakfast).
+```
 
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->
-
 

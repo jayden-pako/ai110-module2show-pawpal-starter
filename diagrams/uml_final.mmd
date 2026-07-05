@@ -1,9 +1,10 @@
 classDiagram
-    %% PawPal — pet-care planning app
+    %% PawPal — pet-care planning app (updated to match final implementation)
     %% Domain model: an Owner manages Pets; each Pet has scheduled care
-    %% items (meals, meds, walks, grooming) and a weekly shopping cart.
-    %% A CarePlanner reads those items and produces a DailyPlan that
-    %% includes the reasoning behind it.
+    %% items (meals, meds, walks, grooming) and weekly shopping carts.
+    %% A CarePlanner reads those items across all of an owner's pets and
+    %% produces reasoned DailyPlans, then sorts / filters / conflict-checks
+    %% the resulting PlanEntry list.
 
     class Owner {
         +int ownerId
@@ -11,7 +12,8 @@ classDiagram
         +string email
         +string phoneNumber
         -string passwordHash
-        +signUp(name, email, password) Owner
+        -bool signedIn
+        +signUp(name, email, password) Owner$
         +signIn(email, password) bool
         +signOut() void
         +setPassword(newPassword) void
@@ -32,6 +34,7 @@ classDiagram
         +scheduleGrooming(appointment) void
         +buildShoppingCart() ShoppingCart
         +listCareItems() CareItem[]
+        -nextItemId() int
     }
 
     class CareItem {
@@ -39,39 +42,54 @@ classDiagram
         +int itemId
         +TimeOfDay timeOfDay
         +string notes
-        +describe() string
+        +describe()* string
+        +occurs_on(day)* bool
+        +recurrence() Frequency
     }
 
     class Meal {
         +string foodName
         +float portionGrams
         +DayOfWeek[] days
+        +describe() string
+        +occurs_on(day) bool
+        +recurrence() Frequency
     }
 
     class Medication {
         +string medName
         +string dosage
-        +string frequency
         +Date startDate
         +Date endDate
+        +int timesPerDay
+        +TimeOfDay[] timesOfDay
+        +describe() string
+        +occurs_on(day) bool
+        +recurrence() Frequency
     }
 
     class Walk {
         +int durationMinutes
         +string route
         +DayOfWeek[] days
+        +describe() string
+        +occurs_on(day) bool
+        +recurrence() Frequency
     }
 
     class GroomingAppointment {
-        +Date dateTime
+        +DateTime dateTime
         +string serviceType
         +string provider
         +bool confirmed
+        +describe() string
+        +occurs_on(day) bool
     }
 
     class ShoppingCart {
         +int cartId
         +DateRange week
+        +ShoppingItem[] items
         +addItem(item) void
         +removeItem(itemId) void
         +total() float
@@ -82,10 +100,17 @@ classDiagram
         +int quantity
         +float unitPrice
         +string category
+        +lineTotal() float
     }
 
     class CarePlanner {
         +generateDailyPlan(pet, date) DailyPlan
+        +generateDailyPlansForOwner(owner, date) Map~int, DailyPlan~
+        +sortByTime(entries) PlanEntry[]
+        +filterByStatus(entries, completed) PlanEntry[]
+        +filterByPet(entries, petName) PlanEntry[]
+        +markTaskComplete(entry) PlanEntry
+        +detectConflicts(entries) string[]
         -collectItemsForDay(pet, date) CareItem[]
         -explainReasoning(items) string
     }
@@ -94,6 +119,7 @@ classDiagram
         +int planId
         +Date date
         +string reasoning
+        +PlanEntry[] entries
         +addEntry(entry) void
         +toSchedule() PlanEntry[]
     }
@@ -101,7 +127,46 @@ classDiagram
     class PlanEntry {
         +TimeOfDay timeOfDay
         +string action
+        +CareItem careItem
         +bool completed
+        +string petName
+        +Frequency frequency
+        +Date dueDate
+        +markComplete() void
+    }
+
+    %% -- Value types / enums --------------------------------------------
+    class TimeOfDay {
+        <<enumeration>>
+        MORNING
+        MIDDAY
+        AFTERNOON
+        EVENING
+        NIGHT
+    }
+
+    class DayOfWeek {
+        <<enumeration>>
+        MONDAY
+        TUESDAY
+        WEDNESDAY
+        THURSDAY
+        FRIDAY
+        SATURDAY
+        SUNDAY
+    }
+
+    class Frequency {
+        <<enumeration>>
+        NONE
+        DAILY
+        WEEKLY
+    }
+
+    class DateRange {
+        +Date start
+        +Date end
+        +contains(day) bool
     }
 
     %% Ownership
@@ -119,14 +184,24 @@ classDiagram
     Pet "1" *-- "0..*" Walk : walks
     Pet "1" *-- "0..*" GroomingAppointment : grooms
 
-    %% Weekly shopping
-    Pet "1" *-- "1" ShoppingCart : needs
+    %% Weekly shopping (one cart per week; prior weeks retained)
+    Pet "1" *-- "0..*" ShoppingCart : needs
     ShoppingCart "1" *-- "0..*" ShoppingItem : contains
+    ShoppingCart "1" --> "1" DateRange : week
 
-    %% Planning
+    %% Planning — the planner orchestrates, holding no domain data of its own
+    CarePlanner ..> Owner : reads pets
     CarePlanner ..> Pet : reads
-    CarePlanner ..> CareItem : reads
+    CarePlanner ..> CareItem : selects via occurs_on
     CarePlanner ..> DailyPlan : creates
+    CarePlanner ..> PlanEntry : sorts / filters / conflict-checks
     Pet "1" --> "0..*" DailyPlan : has
-    DailyPlan "1" *-- "1..*" PlanEntry : organizes
+    DailyPlan "1" *-- "0..*" PlanEntry : organizes
     PlanEntry ..> CareItem : references
+
+    %% Enum usage
+    CareItem ..> TimeOfDay : scheduled in
+    CareItem ..> Frequency : recurrence()
+    PlanEntry ..> Frequency : repeats
+    Meal ..> DayOfWeek : on days
+    Walk ..> DayOfWeek : on days

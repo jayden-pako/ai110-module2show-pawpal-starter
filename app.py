@@ -31,12 +31,11 @@ st.title("🐾 PawPal+")
 
 st.markdown(
     """
-Welcome to the PawPal+ starter app.
+Welcome to **PawPal+**, your pet-care planning assistant.
 
-This file is intentionally thin. It gives you a working Streamlit app so you can start quickly,
-but **it does not implement the project logic**. Your job is to design the system and build it.
-
-Use this app as your interactive demo once your backend classes/functions exist.
+Add your pets, schedule their care tasks, then generate a daily plan that's
+**sorted** morning-to-night, **filterable** by pet and status, and automatically
+**conflict-checked** so overlapping tasks never slip past you.
 """
 )
 
@@ -146,26 +145,73 @@ else:
 
 st.divider()
 
-st.subheader("Build Schedule")
-st.caption("Generates today's plan for every pet using CarePlanner.")
+st.subheader("Today's Schedule")
+st.caption("Builds, sorts, filters, and conflict-checks today's plan across all your pets using CarePlanner.")
 
-if st.button("Generate schedule"):
+# Persist the generated plans in the vault so the filter widgets below can
+# re-render the schedule on every rerun without rebuilding it each time.
+if st.button("Generate schedule", type="primary"):
     if not owner.display_pets():
         st.warning("Add a pet and at least one task first.")
     else:
         today = date.today()
-        plans = planner.generate_daily_plans_for_owner(owner, today)
-        for pet in owner.display_pets():
-            plan = plans[pet.pet_id]
-            st.markdown(f"**{pet.pet_name}'s plan for {plan.date}**")
-            st.caption(plan.reasoning)
-            schedule = plan.to_schedule()
-            if schedule:
-                st.table(
-                    [
-                        {"time": entry.time_of_day.name.title(), "task": entry.action}
-                        for entry in schedule
-                    ]
-                )
-            else:
-                st.write("_No tasks scheduled today._")
+        st.session_state.plans = planner.generate_daily_plans_for_owner(owner, today)
+        st.session_state.plan_date = today
+
+plans = st.session_state.get("plans")
+if plans:
+    # Flatten every pet's plan into one list so the scheduler can reason across
+    # pets — conflicts, sorting, and filtering all operate on the whole day.
+    all_entries = [entry for plan in plans.values() for entry in plan.entries]
+
+    # 1) Conflicts FIRST, up top. A pet owner needs to know two tasks clash
+    #    *before* reading the table, so we surface them as prominent warnings
+    #    that name the pets, the tasks, and the time slot they collide in.
+    conflicts = planner.detect_conflicts(all_entries)
+    if conflicts:
+        st.warning(
+            f"⚠️ {len(conflicts)} scheduling conflict(s) found — these tasks land "
+            "in the same time slot. Consider moving one to a different part of the day."
+        )
+        for message in conflicts:
+            st.warning(message)
+    else:
+        st.success("✅ No scheduling conflicts — every task has its own time slot.")
+
+    # 2) Filters, driven by the persisted plan (no rebuild needed).
+    pet_options = ["All pets"] + [pet.pet_name for pet in owner.display_pets()]
+    filter_col1, filter_col2 = st.columns(2)
+    with filter_col1:
+        pet_filter = st.selectbox("Show pet", pet_options)
+    with filter_col2:
+        status_filter = st.selectbox("Show tasks", ["All", "To do", "Completed"])
+
+    # 3) Sort chronologically, then narrow to the chosen pet / status.
+    entries = planner.sort_by_time(all_entries)
+    if pet_filter != "All pets":
+        entries = planner.filter_by_pet(entries, pet_filter)
+    if status_filter == "To do":
+        entries = planner.filter_by_status(entries, completed=False)
+    elif status_filter == "Completed":
+        entries = planner.filter_by_status(entries, completed=True)
+
+    # 4) One professional, unified table across all pets.
+    if entries:
+        st.table(
+            [
+                {
+                    "Time": entry.time_of_day.name.title(),
+                    "Pet": entry.pet_name,
+                    "Task": entry.action,
+                    "Repeats": entry.frequency.value.title(),
+                    "Status": "✅ Done" if entry.completed else "⭕ To do",
+                }
+                for entry in entries
+            ]
+        )
+        st.caption(
+            f"Showing {len(entries)} of {len(all_entries)} task(s) "
+            f"for {st.session_state.plan_date}."
+        )
+    else:
+        st.info("No tasks match the current filter.")
