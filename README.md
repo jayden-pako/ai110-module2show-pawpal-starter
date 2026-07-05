@@ -43,8 +43,20 @@ pip install -r requirements.txt
 7. Refine UML so it matches what you actually built.
 
 ## 🖥️ Sample Output
+```
+============================================
+Today's Schedule — Sunday, July 05, 2026
+Owner: Jayden
+============================================
 
-Paste a sample of your app's CLI or Streamlit output here so a reader can see what a generated plan looks like:
+Rex (Dog)
+  [MORNING  ] Meal: 150g of Kibble (Morning) — one scoop
+  [MIDDAY   ] Grooming: Bath & brush with Happy Paws at 2026-07-05 12:30 (confirmed) — nail trim too
+  [AFTERNOON] Walk: 30 min via Riverside loop (Afternoon) — keep it on-leash
+
+Mochi (Cat)
+  [EVENING  ] Meal: 85g of Wet food (Evening)
+  [NIGHT    ] Medication: Amitriptyline 5mg, 1x/day — with food
 
 ```
 # e.g.:
@@ -67,7 +79,15 @@ pytest --cov
 Sample test output:
 
 ```
-# Paste your pytest output here
+======================== test session starts =========================
+platform win32 -- Python 3.14.5, pytest-9.0.3, pluggy-1.6.0
+rootdir: C:\Users\pakoj41074\Desktop\ai engineering\ai110-module2show-pawpal-starter
+plugins: anyio-4.13.0
+collected 2 items                                                     
+
+test_pawpal.py ..                                               [100%]
+
+========================= 2 passed in 0.47s ==========================
 ```
 
 ## 📐 Smarter Scheduling

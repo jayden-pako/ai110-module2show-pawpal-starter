@@ -1,24 +1,46 @@
 """PawPal — pet-care planning app.
 
-Class skeleton generated from diagrams/uml.mmd.
+Class skeleton generated from diagrams/uml.mmd, now with working behavior.
 
 Design notes:
 - Data-holding objects (Pet, the CareItem family, ShoppingCart, DailyPlan,
   etc.) are modeled as dataclasses to keep them clean and declarative.
-- Behavior-heavy classes (Owner authentication, CarePlanner) carry method
-  stubs to be implemented later.
+- Behavior-heavy classes (Owner authentication, CarePlanner) carry the real
+  logic that drives the system.
 - CareItem is an abstract base so meals, meds, walks, and grooming share a
-  common shape that the planner can treat uniformly.
+  common shape that the planner can treat uniformly. Every concrete item
+  answers two questions polymorphically: `describe()` (what am I?) and
+  `occurs_on(day)` (am I due on this date?).
 
-Method bodies are intentionally left as stubs (`raise NotImplementedError`).
+Communication map (who talks to whom):
+
+    CarePlanner ── reads ──▶ Owner.display_pets()
+         │                        │
+         │                        ▼
+         └── per pet ──▶ Pet.list_care_items() ──▶ [CareItem, ...]
+                                 │
+                                 ▼  (planner asks each item)
+                    CareItem.occurs_on(day) / CareItem.describe()
+                                 │
+                                 ▼
+                    PlanEntry ──collected into──▶ DailyPlan
+                                 │
+                                 ▼
+                    DailyPlan stored back on Pet.plans
+
+The planner never inspects concrete subclass types; it relies entirely on the
+CareItem interface, so new care kinds slot in without changing the Brain.
 """
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from enum import Enum, IntEnum
+from itertools import count
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +72,27 @@ class DateRange:
     start: date
     end: date
 
+    def contains(self, day: date) -> bool:
+        """Return True if `day` falls within this span (inclusive)."""
+        return self.start <= day <= self.end
+
+
+# Weekday order matches date.weekday() (0 = Monday ... 6 = Sunday), which is the
+# same order the DayOfWeek members are declared in, so an index lookup is exact.
+_WEEKDAYS: list[DayOfWeek] = list(DayOfWeek)
+
+
+def _day_of_week(day: date) -> DayOfWeek:
+    """Map a calendar date onto its DayOfWeek member."""
+    return _WEEKDAYS[day.weekday()]
+
+
+def _current_week(today: date | None = None) -> DateRange:
+    """Return the Monday..Sunday span containing `today` (defaults to now)."""
+    today = today or date.today()
+    monday = today - timedelta(days=today.weekday())
+    return DateRange(start=monday, end=monday + timedelta(days=6))
+
 
 # ---------------------------------------------------------------------------
 # Care items (abstract base + concrete kinds)
@@ -76,6 +119,10 @@ class CareItem(ABC):
         """
         raise NotImplementedError
 
+    def _with_notes(self, text: str) -> str:
+        """Append notes to a description if any are present."""
+        return f"{text} — {self.notes}" if self.notes else text
+
 
 @dataclass
 class Meal(CareItem):
@@ -84,10 +131,15 @@ class Meal(CareItem):
     days: list[DayOfWeek] = field(default_factory=list)
 
     def describe(self) -> str:
-        raise NotImplementedError
+        summary = (
+            f"Meal: {self.portion_grams:g}g of {self.food_name} "
+            f"({self.time_of_day.name.title()})"
+        )
+        return self._with_notes(summary)
 
     def occurs_on(self, day: date) -> bool:
-        raise NotImplementedError
+        # An empty day list means "every day" (e.g. a standing daily feeding).
+        return not self.days or _day_of_week(day) in self.days
 
 
 @dataclass
@@ -102,10 +154,15 @@ class Medication(CareItem):
     times_of_day: list[TimeOfDay] = field(default_factory=list)
 
     def describe(self) -> str:
-        raise NotImplementedError
+        summary = (
+            f"Medication: {self.med_name} {self.dosage}, "
+            f"{self.times_per_day}x/day"
+        )
+        return self._with_notes(summary)
 
     def occurs_on(self, day: date) -> bool:
-        raise NotImplementedError
+        # A course of medication runs across an inclusive date range.
+        return self.start_date <= day <= self.end_date
 
 
 @dataclass
@@ -115,10 +172,14 @@ class Walk(CareItem):
     days: list[DayOfWeek] = field(default_factory=list)
 
     def describe(self) -> str:
-        raise NotImplementedError
+        summary = (
+            f"Walk: {self.duration_minutes} min via {self.route} "
+            f"({self.time_of_day.name.title()})"
+        )
+        return self._with_notes(summary)
 
     def occurs_on(self, day: date) -> bool:
-        raise NotImplementedError
+        return not self.days or _day_of_week(day) in self.days
 
 
 @dataclass
@@ -129,10 +190,16 @@ class GroomingAppointment(CareItem):
     confirmed: bool = False
 
     def describe(self) -> str:
-        raise NotImplementedError
+        status = "confirmed" if self.confirmed else "unconfirmed"
+        summary = (
+            f"Grooming: {self.service_type} with {self.provider} "
+            f"at {self.date_time:%Y-%m-%d %H:%M} ({status})"
+        )
+        return self._with_notes(summary)
 
     def occurs_on(self, day: date) -> bool:
-        raise NotImplementedError
+        # A one-off appointment happens on exactly one calendar day.
+        return self.date_time.date() == day
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +212,10 @@ class ShoppingItem:
     unit_price: float
     category: str
 
+    def line_total(self) -> float:
+        """Return the cost of this line (quantity times unit price)."""
+        return self.quantity * self.unit_price
+
 
 @dataclass
 class ShoppingCart:
@@ -153,13 +224,19 @@ class ShoppingCart:
     items: list[ShoppingItem] = field(default_factory=list)
 
     def add_item(self, item: ShoppingItem) -> None:
-        raise NotImplementedError
+        """Append a shopping item to the cart."""
+        self.items.append(item)
 
     def remove_item(self, item_id: int) -> None:
-        raise NotImplementedError
+        """Remove the item at position `item_id` if it exists."""
+        # ShoppingItem carries no id of its own, so `item_id` is the item's
+        # zero-based position in the cart (the order it was added).
+        if 0 <= item_id < len(self.items):
+            del self.items[item_id]
 
     def total(self) -> float:
-        raise NotImplementedError
+        """Return the summed cost of every item in the cart."""
+        return sum(item.line_total() for item in self.items)
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +249,10 @@ class PlanEntry:
     care_item: CareItem | None = None
     completed: bool = False
 
+    def mark_complete(self) -> None:
+        """Mark this task as done."""
+        self.completed = True
+
 
 @dataclass
 class DailyPlan:
@@ -181,10 +262,13 @@ class DailyPlan:
     entries: list[PlanEntry] = field(default_factory=list)
 
     def add_entry(self, entry: PlanEntry) -> None:
-        raise NotImplementedError
+        """Append a plan entry to this day's list of tasks."""
+        self.entries.append(entry)
 
     def to_schedule(self) -> list[PlanEntry]:
-        raise NotImplementedError
+        """Return the day's entries ordered chronologically."""
+        # Present the day in chronological order (morning -> night).
+        return sorted(self.entries, key=lambda e: e.time_of_day)
 
 
 # ---------------------------------------------------------------------------
@@ -206,28 +290,116 @@ class Pet:
     shopping_carts: list[ShoppingCart] = field(default_factory=list)
     plans: list[DailyPlan] = field(default_factory=list)
 
+    def _next_item_id(self) -> int:
+        """Return the next unused care-item id for this pet."""
+        existing = [item.item_id for item in self.list_care_items()]
+        return max(existing, default=0) + 1
+
     def create_meal(self, food: str, days: list[DayOfWeek]) -> Meal:
-        raise NotImplementedError
+        """Create, attach, and return a Meal for the given food and days."""
+        meal = Meal(
+            item_id=self._next_item_id(),
+            time_of_day=TimeOfDay.MORNING,
+            notes="",
+            food_name=food,
+            portion_grams=0.0,
+            days=list(days),
+        )
+        self.meals.append(meal)
+        return meal
 
     def schedule_medication(self, med: Medication) -> Medication:
-        raise NotImplementedError
+        """Attach a medication to this pet, assigning an id if needed."""
+        if med.item_id == 0:
+            med.item_id = self._next_item_id()
+        self.medications.append(med)
+        return med
 
     def schedule_walk(self, walk: Walk) -> None:
-        raise NotImplementedError
+        """Attach a walk to this pet, assigning an id if needed."""
+        if walk.item_id == 0:
+            walk.item_id = self._next_item_id()
+        self.walks.append(walk)
 
     def schedule_grooming(self, appointment: GroomingAppointment) -> None:
-        raise NotImplementedError
+        """Attach a grooming appointment to this pet, assigning an id if needed."""
+        if appointment.item_id == 0:
+            appointment.item_id = self._next_item_id()
+        self.grooming.append(appointment)
 
     def build_shopping_cart(self) -> ShoppingCart:
-        raise NotImplementedError
+        """Derive a weekly cart from this pet's recurring care items.
+
+        Prices aren't known here, so unit_price is left at 0.0 for the owner to
+        fill in; quantities are inferred from how often each item recurs.
+        """
+        week = _current_week()
+        cart = ShoppingCart(cart_id=len(self.shopping_carts) + 1, week=week)
+
+        for meal in self.meals:
+            # One portion per scheduled day (a bare list => every day of week).
+            servings = len(meal.days) or 7
+            cart.add_item(
+                ShoppingItem(
+                    product_name=meal.food_name,
+                    quantity=servings,
+                    unit_price=0.0,
+                    category="Food",
+                )
+            )
+
+        for med in self.medications:
+            # Only stock meds whose course overlaps this week.
+            if med.end_date >= week.start and med.start_date <= week.end:
+                cart.add_item(
+                    ShoppingItem(
+                        product_name=med.med_name,
+                        quantity=med.times_per_day * 7,
+                        unit_price=0.0,
+                        category="Medication",
+                    )
+                )
+
+        self.shopping_carts.append(cart)
+        return cart
 
     def list_care_items(self) -> list[CareItem]:
-        raise NotImplementedError
+        """The single retrieval surface the planner reads from.
+
+        Flattens every care category into one uniform list of CareItem so
+        callers never touch the concrete-typed collections directly.
+        """
+        items: list[CareItem] = []
+        items.extend(self.meals)
+        items.extend(self.medications)
+        items.extend(self.walks)
+        items.extend(self.grooming)
+        return items
 
 
 # ---------------------------------------------------------------------------
 # Owner
 # ---------------------------------------------------------------------------
+_owner_id_seq = count(1)
+
+
+def _hash_password(password: str, salt: str | None = None) -> str:
+    """Return a `salt$digest` string using PBKDF2-HMAC-SHA256."""
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt), 100_000
+    ).hex()
+    return f"{salt}${digest}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    """Return True if `password` matches the stored `salt$digest` string."""
+    if "$" not in stored:
+        return False
+    salt, _ = stored.split("$", 1)
+    return secrets.compare_digest(_hash_password(password, salt), stored)
+
+
 @dataclass
 class Owner:
     owner_id: int
@@ -236,43 +408,179 @@ class Owner:
     phone_number: str
     _password_hash: str = ""
     pets: list[Pet] = field(default_factory=list)
+    _signed_in: bool = False
 
     @classmethod
     def sign_up(cls, name: str, email: str, password: str) -> "Owner":
+        """Create and return a new Owner account with the given credentials."""
         # Constructs a new account, so it is a classmethod rather than an
         # instance method (no Owner exists yet at sign-up time).
-        raise NotImplementedError
+        owner = cls(
+            owner_id=next(_owner_id_seq),
+            name=name,
+            email=email,
+            phone_number="",
+        )
+        owner.set_password(password)
+        return owner
 
     def sign_in(self, email: str, password: str) -> bool:
-        raise NotImplementedError
+        """Authenticate the owner; return True and mark signed in on success."""
+        if email == self.email and _verify_password(password, self._password_hash):
+            self._signed_in = True
+            return True
+        return False
 
     def sign_out(self) -> None:
-        raise NotImplementedError
+        """Mark the owner as signed out."""
+        self._signed_in = False
 
     def set_password(self, new_password: str) -> None:
-        raise NotImplementedError
+        """Hash and store a new password for the owner."""
+        self._password_hash = _hash_password(new_password)
 
     def add_pet(self, pet: Pet) -> None:
-        raise NotImplementedError
+        """Register a pet with this owner and set its back-reference."""
+        pet.owner = self  # keep the back-reference in sync
+        self.pets.append(pet)
 
     def remove_pet(self, pet_id: int) -> None:
-        raise NotImplementedError
+        """Remove the pet with the given id from this owner."""
+        self.pets = [pet for pet in self.pets if pet.pet_id != pet_id]
 
     def display_pets(self) -> list[Pet]:
-        raise NotImplementedError
+        """Return a copy of this owner's list of pets."""
+        return list(self.pets)
 
 
 # ---------------------------------------------------------------------------
-# Planner (service)
+# Planner (service) — the "Brain"
 # ---------------------------------------------------------------------------
 class CarePlanner:
-    """Reads a pet's care items and produces a reasoned daily plan."""
+    """Reads a pet's care items and produces a reasoned daily plan.
 
+    The planner is stateless: it holds no data of its own, it orchestrates the
+    data classes. It retrieves tasks (Pet.list_care_items), organizes them
+    (filter by occurs_on, order by TimeOfDay), and manages the output as a
+    DailyPlan stored back on the pet.
+    """
+
+    def __init__(self) -> None:
+        """Initialize the planner with a fresh plan-id sequence."""
+        self._plan_id_seq = count(1)
+
+    # -- single pet -------------------------------------------------------
     def generate_daily_plan(self, pet: Pet, day: date) -> DailyPlan:
-        raise NotImplementedError
+        """Build, store, and return one pet's ordered plan for the given day."""
+        items = self._collect_items_for_day(pet, day)
+        plan = DailyPlan(plan_id=next(self._plan_id_seq), date=day)
 
+        for item in sorted(items, key=lambda i: i.time_of_day):
+            plan.add_entry(
+                PlanEntry(
+                    time_of_day=item.time_of_day,
+                    action=item.describe(),
+                    care_item=item,
+                )
+            )
+
+        plan.reasoning = self._explain_reasoning(items)
+        pet.plans.append(plan)  # hand the finished plan back to the pet
+        return plan
+
+    # -- across every pet an owner has ------------------------------------
+    def generate_daily_plans_for_owner(
+        self, owner: Owner, day: date
+    ) -> dict[int, DailyPlan]:
+        """Retrieve and plan tasks across ALL of an owner's pets for a day.
+
+        This is the top-level entry point: the planner walks the owner's pets
+        and builds one DailyPlan each, keyed by pet_id.
+        """
+        return {
+            pet.pet_id: self.generate_daily_plan(pet, day)
+            for pet in owner.display_pets()
+        }
+
+    # -- internals --------------------------------------------------------
     def _collect_items_for_day(self, pet: Pet, day: date) -> list[CareItem]:
-        raise NotImplementedError
+        """Return the pet's care items that are due on the given day."""
+        # Ask the pet for everything, then let each item decide if it's due.
+        return [item for item in pet.list_care_items() if item.occurs_on(day)]
 
     def _explain_reasoning(self, items: list[CareItem]) -> str:
-        raise NotImplementedError
+        """Return a short summary of the plan's task counts by kind."""
+        if not items:
+            return "No care tasks are scheduled for this day."
+
+        counts: dict[str, int] = {}
+        for item in items:
+            kind = type(item).__name__
+            counts[kind] = counts.get(kind, 0) + 1
+
+        breakdown = ", ".join(
+            f"{count} {kind.lower()}{'s' if count != 1 else ''}"
+            for kind, count in sorted(counts.items())
+        )
+        return (
+            f"{len(items)} task(s) planned ({breakdown}), "
+            "ordered from morning to night."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Demonstration of the classes communicating end-to-end
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    # 1. An owner signs up and authenticates.
+    owner = Owner.sign_up("Alex", "alex@example.com", "hunter2")
+    assert owner.sign_in("alex@example.com", "hunter2")
+
+    # 2. The owner registers pets.
+    rex = Pet(pet_id=1, pet_name="Rex", animal_type="Dog", pet_breed="Lab", age=4)
+    mochi = Pet(pet_id=2, pet_name="Mochi", animal_type="Cat", pet_breed="Calico", age=2)
+    owner.add_pet(rex)
+    owner.add_pet(mochi)
+
+    # 3. Care items are attached to the pets (each object owns its own data).
+    rex.create_meal("Kibble", [DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY, DayOfWeek.FRIDAY])
+    rex.schedule_walk(
+        Walk(
+            item_id=0,
+            time_of_day=TimeOfDay.EVENING,
+            notes="park loop",
+            duration_minutes=30,
+            route="Riverside",
+            days=[DayOfWeek.MONDAY],
+        )
+    )
+    rex.schedule_medication(
+        Medication(
+            item_id=0,
+            time_of_day=TimeOfDay.NIGHT,
+            notes="with food",
+            med_name="Carprofen",
+            dosage="75mg",
+            start_date=date(2026, 7, 1),
+            end_date=date(2026, 7, 31),
+            times_per_day=1,
+        )
+    )
+    mochi.create_meal("Wet food", [])  # every day
+
+    # 4. The Brain retrieves tasks across ALL the owner's pets for a given day.
+    planner = CarePlanner()
+    a_monday = date(2026, 7, 6)
+    plans = planner.generate_daily_plans_for_owner(owner, a_monday)
+
+    for pet in owner.display_pets():
+        plan = plans[pet.pet_id]
+        print(f"\n{pet.pet_name}'s plan for {plan.date} — {plan.reasoning}")
+        for entry in plan.to_schedule():
+            print(f"  [{entry.time_of_day.name:<9}] {entry.action}")
+
+    # 5. Shopping carts are derived from recurring care items.
+    cart = rex.build_shopping_cart()
+    print(f"\nRex's cart for week {cart.week.start}..{cart.week.end}:")
+    for item in cart.items:
+        print(f"  {item.quantity}x {item.product_name} ({item.category})")
