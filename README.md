@@ -71,6 +71,21 @@ Mochi (Cat)
 ```bash
 # Run the full test suite:
 pytest
+python -m pytest
+
+```
+system reliability: 4.5 stars 
+These 10 tests cover PawPal+'s core care-planning logic: marking tasks complete, adding care items to a pet, and sorting a day's tasks into chronological order (morning → night). They verify recurrence — a completed daily task spawns the next day's occurrence, including across a year boundary, while one-off tasks don't recur. They also check conflict detection (two tasks in the same time slot raise a warning, distinct slots stay silent) plus edge cases: a pet with no tasks yields an empty plan, and medication courses fall due on their inclusive start/end dates.
+======== test session starts =========================
+platform win32 -- Python 3.14.5, pytest-9.0.3, pluggy-1.6.0
+rootdir: C:\Users\pakoj41074\Desktop\ai engineering\ai110-module2show-pawpal-starter
+plugins: anyio-4.13.0
+collected 10 items                                                    
+
+test_pawpal.py ..........                                       [100%]
+
+========================= 10 passed in 0.43s =========================
+```
 
 # Run with coverage:
 pytest --cov
@@ -148,3 +163,5 @@ Describe your app in numbered steps so a reader can follow along without watchin
 5. <!-- Add more steps as needed -->
 
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->
+
+
