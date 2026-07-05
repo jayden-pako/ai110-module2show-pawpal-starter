@@ -4,13 +4,81 @@
 
 **a. Initial design**
 
-- Briefly describe your initial UML design.
-- What classes did you include, and what responsibilities did you assign to each?
+My initial UML design models PawPal as an owner who manages pets, where each pet
+has scheduled care items. The
+key design decision was to promote the app's core actions (add meal, schedule
+meds, schedule a walk, schedule grooming) into first-class objects rather than
+leaving them as methods on `Pet`, so each has its own state and lifecycle.
+
+- **Owner** — Represents a user account. Responsible for authentication
+  (`sign_up`, `sign_in`, `sign_out`, `set_password`) and managing its pets
+  (`add_pet`, `remove_pet`, `display_pets`). Stores the password as a private
+  `_password_hash` rather than plaintext.
+- **Pet** — The central domain entity (name, animal type, breed, age). Owns its
+  collections of care items (meals, medications, walks, grooming appointments),
+  its weekly shopping cart, and its generated plans. Provides factory/scheduling
+  methods (`create_meal`, `schedule_medication`, `schedule_walk`,
+  `schedule_grooming`, `build_shopping_cart`, `list_care_items`).
+- **CareItem (abstract base)** — Defines the common shape shared by everything
+  scheduled for a pet: `item_id`, `time_of_day`, `notes`, and an abstract
+  `describe()`. This lets the planner treat every care type uniformly.
+- **Meal, Medication, Walk, GroomingAppointment** — Concrete care items that
+  inherit from `CareItem`, each adding its own fields (e.g. `food_name`/`days`
+  for meals, `dosage`/`frequency` for medications). Responsible for representing
+  one specific kind of scheduled care.
+- **ShoppingCart** — Represents one pet's weekly shopping for a `DateRange`.
+  Responsible for holding `ShoppingItem`s and computing the `total()`.
+- **ShoppingItem** — A single line item (product, quantity, unit price,
+  category).
+- **DailyPlan** — The generated plan for a specific date. Responsible for
+  holding the ordered `PlanEntry`s and the `reasoning` string that explains why
+  the plan was built that way.
+- **PlanEntry** — One time-slotted action within a plan, optionally linked back
+  to the `CareItem` it came from and tracking whether it's `completed`.
+- **CarePlanner** — A stateless service class. Responsible for the scheduling
+  logic: it reads a pet's care items for a given day, orders them, and produces
+  a `DailyPlan` with reasoning (`generate_daily_plan`, plus the private helpers
+  `_collect_items_for_day` and `_explain_reasoning`).
+
+Supporting value types `DayOfWeek` and `TimeOfDay` (enums) and `DateRange`
+provide type safety for fields that would otherwise be loose strings.
 
 **b. Design changes**
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+Yes. After reviewing the first skeleton, I made several changes so the scheduler
+would actually be able to do its job. Here is what I changed and why:
+
+- **Added an `occurs_on(day)` method to every care item.** Meals, meds, walks,
+  and grooming each store their timing differently. Without a shared method, the
+  planner would have to check the type of each item one by one. Now it can just
+  ask any item "are you happening on this day?" and get an answer, no matter what
+  kind of item it is.
+
+- **Gave medications a clear frequency instead of plain text.** Before, the
+  frequency was just a string like "twice daily," which the code can't really
+  understand. I changed it to a number (`times_per_day`) plus a list of times of
+  day, so the scheduler can read it directly.
+
+- **Made `TimeOfDay` sortable.** The plan needs to list things in order from
+  morning to night. The original version couldn't be sorted, so I switched it to
+  use numbers (morning = 1, night = 5). Now ordering the day just works.
+
+- **Linked each pet back to its owner.** The owner had a list of pets, but a pet
+  had no way to know who owned it. I added an `owner` field to `Pet` so the
+  relationship goes both ways and a pet can't get separated from its owner.
+
+- **Turned sign-up into a method that creates the account.** Sign-up was written
+  as something you call on an existing owner, but that doesn't make sense because
+  the owner doesn't exist yet. I changed it to a classmethod that builds and
+  returns a new owner.
+
+- **Allowed a pet to keep more than one shopping cart.** A pet had a single cart,
+  but carts are weekly, so the old design erased last week's cart every time. I
+  changed it to a list of carts so past weeks are kept.
+
+I made these changes because the original design looked fine on the surface but
+would have blocked the scheduler from being written cleanly. Fixing the data
+model first was cheaper than working around it later.
 
 ---
 
